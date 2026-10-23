@@ -1,0 +1,23 @@
+# Visor: deep-space navy, HUD cyan, armour green, visor gold, alien violet
+palette = 0=#0a1420
+palette = 1=#e5484d
+palette = 2=#7fb548
+palette = 3=#f5b841
+palette = 4=#2f8fff
+palette = 5=#a66bff
+palette = 6=#3fd0ff
+palette = 7=#b8d4e3
+palette = 8=#3a4f63
+palette = 9=#ff6b6b
+palette = 10=#a3d977
+palette = 11=#ffd27a
+palette = 12=#6cb6ff
+palette = 13=#c79bff
+palette = 14=#8be9ff
+palette = 15=#eaf6ff
+background = #050a12
+foreground = #c8e9f5
+cursor-color = #3fd0ff
+cursor-text = #050a12
+selection-background = #123a52
+selection-foreground = #eaf6ff

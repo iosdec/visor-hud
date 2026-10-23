@@ -1,0 +1,107 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Visor HUD preview</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=block">
+<style>
+  html, body { margin: 0; background: #000; }
+  canvas { display: block; width: 1400px; height: 840px; }
+</style>
+<canvas id="gl" width="1400" height="840"></canvas>
+<script>
+// Renders ../shaders/visor-hud.glsl over a fake terminal so you can tweak it in a browser.
+// Serve the repo root (python3 -m http.server) and open /preview/.
+// URL options: ?t=3.2 freezes time, &focus=0 shows an unfocused pane,
+// &shield=0.6 sets the shell shield level, &mode=hit|charge shows those states.
+const W = 1400, H = 840;
+const q = new URLSearchParams(location.search);
+const C = { cyan: "#3fd0ff", text: "#c8e9f5", gold: "#f5b841", green: "#7fb548", red: "#e5484d", blue: "#6cb6ff", violet: "#a66bff", dim: "#7fa3b5" };
+const prompt = (cmd) => [C.cyan, "pilot", C.dim, "@", C.cyan, "visor", C.text, " ~/projects/relay ", C.gold, "(main)", C.text, " ❯ " + cmd];
+const lines = [
+  prompt("ls"),
+  [C.blue, "src/  tests/  docs/  ", C.green, "Package.swift  ", C.violet, "deploy.sh  ", C.text, "README.md"],
+  [],
+  prompt("git status --short"),
+  [C.green, " M src/Relay/Channel.swift"],
+  [C.green, " M src/Relay/Beacon.swift"],
+  [C.red, "?? notes/waypoints.md"],
+  [],
+  prompt("swift test"),
+  [C.text, "Building for debugging..."],
+  [C.green, "✔ Test run with 48 tests passed after 1.204 seconds."],
+  [],
+  prompt(""),
+];
+const termCanvas = document.createElement("canvas");
+termCanvas.width = W; termCanvas.height = H;
+const ctx = termCanvas.getContext("2d");
+function drawTerminal() {
+  ctx.fillStyle = "#050a12"; ctx.fillRect(0, 0, W, H);
+  ctx.font = "30px 'Share Tech Mono'"; ctx.textBaseline = "top";
+  lines.forEach((l, i) => {
+    let x = 28;
+    for (let j = 0; j < l.length; j += 2) { ctx.fillStyle = l[j]; ctx.fillText(l[j + 1], x, 100 + i * 40); x += ctx.measureText(l[j + 1]).width; }
+  });
+  // block cursor on the last prompt
+  const last = lines[lines.length - 1].filter((_, k) => k % 2).join("");
+  promptX = 28 + ctx.measureText(last).width;
+  ctx.fillStyle = C.cyan; ctx.fillRect(promptX, 98 + (lines.length - 1) * 40, 16, 38);
+}
+let promptX = 0;
+
+const gl = document.getElementById("gl").getContext("webgl2", { preserveDrawingBuffer: true });
+async function main() {
+  const src = await (await fetch("../shaders/visor-hud.glsl")).text();
+  await document.fonts.load("30px 'Share Tech Mono'");
+  drawTerminal();
+  const vs = `#version 300 es
+in vec2 p; void main() { gl_Position = vec4(p, 0, 1); }`;
+  const fs = `#version 300 es
+precision highp float; precision highp int;
+uniform sampler2D iChannel0; uniform vec3 iResolution; uniform float iTime;
+uniform vec4 iCurrentCursor, iPreviousCursor; uniform float iTimeCursorChange, iTimeFocus; uniform int iFocus;
+uniform vec3 iBackgroundColor; uniform vec3 iPalette[256];
+out vec4 o;
+${src}
+void main() { mainImage(o, gl_FragCoord.xy); }`;
+  const compile = (type, s) => { const x = gl.createShader(type); gl.shaderSource(x, s); gl.compileShader(x);
+    if (!gl.getShaderParameter(x, gl.COMPILE_STATUS)) { document.title = "ERR " + gl.getShaderInfoLog(x); throw new Error(gl.getShaderInfoLog(x)); } return x; };
+  const pr = gl.createProgram();
+  gl.attachShader(pr, compile(gl.VERTEX_SHADER, vs)); gl.attachShader(pr, compile(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(pr); gl.useProgram(pr);
+  gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(pr, "p"); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, termCanvas);
+  const U = (n) => gl.getUniformLocation(pr, n);
+  gl.uniform3f(U("iResolution"), W, H, 1);
+  gl.uniform3f(U("iBackgroundColor"), 5 / 255, 10 / 255, 18 / 255);
+  if (q.has("shield")) {
+    const mode = { hit: 255, charge: 128 }[q.get("mode")] ?? 0;
+    gl.uniform3f(U("iPalette[255]"), Number(q.get("shield")), mode / 255, 1 / 255);
+  }
+  // Cursor hops between a few spots so the plasma bolt and reticle show up.
+  const spots = [[21, 8], [38, 12]];   // [column, row]: ends on the prompt
+  const rect = (s) => [s[1] === lines.length - 1 ? promptX : 28 + s[0] * 15.5, H - (98 + s[1] * 40), 16, 40];
+  const FT = parseFloat(q.get("t"));
+  const focus = q.get("focus") === "0" ? 0 : 1;
+  (function frame(ms) {
+    const t = isNaN(FT) ? ms / 1000 : FT;
+    const j = Math.floor(t / 1.2), cur = spots[j % spots.length], prev = spots[(j + spots.length - 1) % spots.length];
+    gl.uniform1f(U("iTime"), t);
+    gl.uniform4f(U("iCurrentCursor"), ...rect(cur));
+    gl.uniform4f(U("iPreviousCursor"), ...rect(prev));
+    gl.uniform1f(U("iTimeCursorChange"), j * 1.2);
+    gl.uniform1f(U("iTimeFocus"), focus ? 0 : -100);
+    gl.uniform1i(U("iFocus"), focus);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    document.body.dataset.ready = "1";
+    requestAnimationFrame(frame);
+  })(0);
+}
+main();
+</script>
